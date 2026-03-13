@@ -133,11 +133,14 @@ flowchart TB
     ClickHouseCluster --> CHData
     MongoCluster --> MongoData
 
+    %% Исправленная логика запросов
     CHData --> QProxy
-    MongoData --> HyperDX
+    MongoData -.->|"Проверка прав и tenant_id"| QProxy
 
-    QProxy --> HyperDX
     QProxy --> Cabinet
+
+    CHData -->|"Прямой доступ к данным"| HyperDX
+    MongoData -.->|"Конфиги дашбордов"| HyperDX
 
     Cabinet --> Customer
     HyperDX --> Engineer
@@ -156,7 +159,7 @@ flowchart TB
     class VMs,K8s,PG sources
     class AgentVM,AgentK8s,AgentPG collectors
     class GW1,GW2,GW3,LB,Recv,MemLim,Transform,Batch,Export gateway
-    class CH1R1,CH1R2,CH2R1,CH2R2,CH3R1,CH3R2,Keeper,TLogs,TMetrics,TTraces,TViews clickhouse
+    class CH1R1,CH1R2,CH2R1,CH2R2,CH3R1,CH3R2,Keeper,TLogs,TMetrics,TViews clickhouse
     class Mongo1,Mongo2,Mongo3,Dashboards,Alerts,Users,SavedQueries mongodb
     class Kafka kafka
     class QProxy query
@@ -173,6 +176,7 @@ flowchart TB
     style Query fill:#FDF6E3,stroke:#C7D2FE,stroke-width:2px,stroke-dasharray: 5 5,color:#1F2937
     style Visualization fill:#FDF6E3,stroke:#FBCFE8,stroke-width:2px,stroke-dasharray: 5 5,color:#1F2937
     style Consumers fill:#FDF6E3,stroke:#FDE68A,stroke-width:2px,stroke-dasharray: 5 5,color:#1F2937
+
     linkStyle default stroke:#333,stroke-width:2px;
 ```
 
@@ -234,6 +238,17 @@ flowchart TB
 Прямой доступ к аналитической БД ClickHouse из внешних сетей строго запрещен. Для изоляции данных между клиентами применяется паттерн **Backend API (или Query Proxy)**:
 
 **Backend API личного кабинета (Query Proxy)**: собственный микросервис облачного провайдера. Выступает единой точкой входа для запросов от клиентских веб-интерфейсов. При получении запроса на построение графика, микросервис валидирует JWT-токен пользователя, определяет его принадлежность к конкретному пользователю и принудительно инжектирует в формируемый SQL-запрос фильтр WHERE tenant_id = '<ID_клиента>'.
+
+#### Алгоритм обработки запроса
+
+**Запрос:** личный кабинет клиента отправляет запрос на получение графиков (например, за последние 6 часов).
+**Идентификация:** Query Proxy извлекает из заголовка JWT-токен, обращается к MongoDB и сопоставляет пользователя с его уникальным tenant_id.
+**Модификация:** прокси-сервер переписывает исходный SQL-запрос, внедряя в него обязательный фильтр по tenant_id.
+**Исходный запрос:** SELECT cpu_load FROM metrics WHERE resource_id = 'vm-123'
+**Модифицированный запрос:** SELECT cpu_load FROM metrics WHERE resource_id = 'vm-123' AND tenant_id = 'tenant_8891'
+**Исполнение:** безопасный запрос отправляется в кластер ClickHouse.
+**Результат:** база данных возвращает отфильтрованные данные, которые прокси передает обратно в Личный кабинет.
+
 
 ### Шаг 6. Уровень визуализации
 Взаимодействие с данными разделено на два потока в зависимости от роли пользователя:

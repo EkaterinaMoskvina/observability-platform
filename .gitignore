@@ -1,0 +1,96 @@
+# ============================================
+# Cloud Observability Platform - .gitignore
+# ============================================
+
+# Dependencies
+node_modules/
+vendor/
+
+# Build outputs
+dist/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Docker volumes (local development)
+data/
+volumes/
+
+# Secrets (never commit!)
+*.pem
+*.key
+*.crt
+secrets/
+.env
+.env.local
+.env.*.local
+
+# ClickHouse data
+clickhouse_data/
+clickhouse_logs/
+
+# Grafana data
+grafana_data/
+
+# Kafka data
+kafka_data/
+zookeeper_data/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Test coverage
+coverage/
+*.cover
+*.coverage
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+venv/
+.venv/
+
+# Go
+*.test
+*.out
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!example.tfvars
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+
+# Helm
+charts/*.tgz
+
+# Backup files
+*.bak
+*.backup

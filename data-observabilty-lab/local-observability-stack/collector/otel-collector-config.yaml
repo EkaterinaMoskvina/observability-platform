@@ -1,0 +1,183 @@
+# OTel Collector с Data Quality проверками
+# Принимает метрики от Python Agent, валидирует
+# Fan-out: → Prometheus (remote write) + → ClickHouse (clickhouse exporter)
+
+receivers:
+  # Приём метрик от агента по OTLP
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # ============================================
+  # 1. MEMORY LIMITER - защита от OOM
+  # ============================================
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 256
+    spike_limit_mib: 64
+
+  # ============================================
+  # 2. BATCH - группировка для эффективности
+  # ============================================
+  batch:
+    send_batch_size: 512
+    timeout: 5s
+
+  # ============================================
+  # 3. RESOURCE - добавляем метаданные
+  # ============================================
+  resource:
+    attributes:
+      - key: collector.version
+        value: "1.0.0"
+        action: insert
+      - key: environment
+        value: "development"
+        action: insert
+
+  # ============================================
+  # 4. DQ: SCHEMA VALIDATION - проверка обязательных полей
+  # ============================================
+  filter/schema_validation:
+    error_mode: ignore
+    metrics:
+      datapoint:
+        # Отбрасываем метрики без unit
+        - 'metric.unit == ""'
+
+  # ============================================
+  # 5. DQ: RANGE VALIDATION - допустимые диапазоны
+  # ============================================
+  filter/range_validation:
+    error_mode: ignore
+    metrics:
+      datapoint:
+        # CPU utilization должен быть 0-1
+        - 'metric.name == "system.cpu.utilization" and (value_double < 0 or value_double > 1)'
+        # Memory utilization должен быть 0-1
+        - 'metric.name == "system.memory.utilization" and (value_double < 0 or value_double > 1)'
+        # Disk utilization должен быть 0-1
+        - 'metric.name == "system.filesystem.utilization" and (value_double < 0 or value_double > 1)'
+        # Battery charge должен быть 0-1
+        - 'metric.name == "system.battery.charge" and (value_double < 0 or value_double > 1)'
+        # Отрицательные значения для counters
+        - 'metric.name == "system.disk.io" and value_int < 0'
+        - 'metric.name == "system.network.io" and value_int < 0'
+
+  # ============================================
+  # 6. DQ: TRANSFORM - добавляем DQ флаги и аномалии
+  # ============================================
+  transform/dq_checks:
+    error_mode: ignore
+    metric_statements:
+      - context: datapoint
+        statements:
+          # Флаг: высокий CPU (> 90%)
+          - set(attributes["dq.alert"], "high_cpu") where metric.name == "system.cpu.utilization" and value_double > 0.9
+
+          # Флаг: критически мало памяти (< 10% available)
+          - set(attributes["dq.alert"], "low_memory") where metric.name == "system.memory.utilization" and attributes["state"] == "available" and value_double < 0.1
+
+          # Флаг: диск почти заполнен (> 90%)
+          - set(attributes["dq.alert"], "disk_full") where metric.name == "system.filesystem.utilization" and value_double > 0.9
+
+          # Флаг: батарея разряжена (< 20%)
+          - set(attributes["dq.alert"], "low_battery") where metric.name == "system.battery.charge" and value_double < 0.2
+
+          # Флаг: PostgreSQL медленные запросы
+          - set(attributes["dq.alert"], "slow_queries") where metric.name == "postgres.slow_queries" and value_int > 0
+
+          # Флаг: PostgreSQL deadlocks
+          - set(attributes["dq.alert"], "deadlocks") where metric.name == "postgres.deadlocks" and value_int > 0
+
+          # Флаг: низкий cache hit ratio PostgreSQL (< 90%)
+          - set(attributes["dq.alert"], "low_cache_hit") where metric.name == "postgres.cache.hit_ratio" and value_double < 0.9
+
+          # Метка качества для всех записей
+          - set(attributes["dq.validated"], "true")
+          - set(attributes["dq.timestamp"], Now())
+
+  # ============================================
+  # 7. ATTRIBUTES - очистка лишних атрибутов
+  # ============================================
+  attributes/cleanup:
+    actions:
+      # Удаляем внутренние атрибуты перед отправкой в Prometheus
+      - key: dq.timestamp
+        action: delete
+
+exporters:
+  # Prometheus Remote Write
+  prometheusremotewrite:
+    endpoint: "http://prometheus:9090/api/v1/write"
+    tls:
+      insecure: true
+    resource_to_telemetry_conversion:
+      enabled: true
+
+  # ============================================
+  # ClickHouse — колоночное хранилище метрик
+  # Таблицы создаются автоматически (create_schema: true)
+  # otel_metrics_gauge, otel_metrics_sum, otel_metrics_histogram
+  # ============================================
+  clickhouse:
+    endpoint: tcp://clickhouse:9000
+    database: otel
+    create_schema: true
+    ttl: 720h  # 30 дней хранения
+    timeout: 10s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      queue_size: 100
+      num_consumers: 4
+
+  # Debug output (для отладки)
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 100
+
+  # Файл для невалидных данных (Dead Letter Queue)
+  file/dlq:
+    path: /var/log/otel/dead_letter.json
+    rotation:
+      max_megabytes: 50
+      max_days: 7
+      max_backups: 3
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+service:
+  extensions: [health_check, zpages]
+
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors:
+        - memory_limiter
+        - filter/schema_validation
+        - filter/range_validation
+        - transform/dq_checks
+        - resource
+        - attributes/cleanup
+        - batch
+      exporters: [prometheusremotewrite, clickhouse, debug]
+
+  telemetry:
+    logs:
+      level: info
+    metrics:
+      address: 0.0.0.0:8888

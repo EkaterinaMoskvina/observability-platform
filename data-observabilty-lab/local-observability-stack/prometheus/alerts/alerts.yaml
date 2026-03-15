@@ -1,0 +1,117 @@
+# Правила алертов для Prometheus
+groups:
+  - name: system_alerts
+    rules:
+      # Высокий CPU
+      - alert: HighCPUUsage
+        expr: system_cpu_utilization{cpu="total"} > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on {{ $labels.host_name }}"
+          description: "CPU usage is {{ $value | humanizePercentage }} for more than 5 minutes"
+
+      # Мало памяти
+      - alert: LowMemoryAvailable
+        expr: system_memory_utilization{state="available"} < 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low memory on {{ $labels.host_name }}"
+          description: "Available memory is only {{ $value | humanizePercentage }}"
+
+      # Диск заполнен
+      - alert: DiskSpaceLow
+        expr: system_filesystem_utilization > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space low on {{ $labels.host_name }}"
+          description: "Disk {{ $labels.mountpoint }} is {{ $value | humanizePercentage }} full"
+
+      # Батарея разряжена
+      - alert: LowBattery
+        expr: system_battery_charge < 0.2 and system_battery_charge{plugged="False"} == 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low battery on {{ $labels.host_name }}"
+          description: "Battery is at {{ $value | humanizePercentage }}, not plugged in"
+
+  - name: postgres_alerts
+    rules:
+      # PostgreSQL медленные запросы
+      - alert: PostgresSlowQueries
+        expr: postgres_slow_queries > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow queries in PostgreSQL"
+          description: "{{ $value }} queries running longer than 1 second"
+
+      # PostgreSQL deadlocks
+      - alert: PostgresDeadlocks
+        expr: increase(postgres_deadlocks[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL deadlocks detected"
+          description: "Deadlocks increased in the last 5 minutes"
+
+      # Низкий cache hit ratio
+      - alert: PostgresLowCacheHit
+        expr: postgres_cache_hit_ratio < 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL cache hit ratio low"
+          description: "Cache hit ratio is {{ $value | humanizePercentage }}"
+
+      # Много подключений
+      - alert: PostgresHighConnections
+        expr: sum(postgres_connections) > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High PostgreSQL connections"
+          description: "{{ $value }} active connections"
+
+  - name: claude_alerts
+    rules:
+      # Высокое потребление токенов
+      - alert: ClaudeHighTokenUsage
+        expr: claude_tokens_today > 100000
+        labels:
+          severity: info
+        annotations:
+          summary: "High Claude Code token usage"
+          description: "{{ $value }} tokens used today"
+
+  - name: docker_alerts
+    rules:
+      # Контейнер использует много CPU
+      - alert: ContainerHighCPU
+        expr: docker_container_cpu > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.container }} high CPU"
+          description: "Container using {{ $value | humanizePercentage }} CPU"
+
+      # Контейнер использует много памяти
+      - alert: ContainerHighMemory
+        expr: docker_container_memory > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.container }} high memory"
+          description: "Container using {{ $value | humanizePercentage }} memory"

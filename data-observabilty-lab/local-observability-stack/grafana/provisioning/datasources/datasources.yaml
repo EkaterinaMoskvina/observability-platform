@@ -1,0 +1,36 @@
+# Grafana Datasources Provisioning
+# Prometheus — основной источник метрик + self-метрики ClickHouse
+# ClickHouse — для SQL-запросов к OTel-данным и system tables
+
+apiVersion: 1
+
+datasources:
+  # UID: prometheus — используется в comparison и workstation дашбордах
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: "15s"
+      httpMethod: POST
+
+  # UID: clickhouse — используется в clickhouse_metrics дашборде
+  # Позволяет SQL-запросы к otel_metrics_gauge/sum + system.* таблицам
+  - name: ClickHouse
+    type: grafana-clickhouse-datasource
+    uid: clickhouse
+    access: proxy
+    editable: true
+    jsonData:
+      server: clickhouse
+      port: 9000
+      username: default
+      defaultDatabase: otel
+      protocol: native
+      dialTimeout: "10"
+      queryTimeout: "60"
+    secureJsonData:
+      password: ""

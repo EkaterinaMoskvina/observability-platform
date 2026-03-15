@@ -1,0 +1,124 @@
+# OTel Collector + Prometheus + ClickHouse + Grafana
+#
+# Access:
+#   Grafana:             http://localhost:3000 (admin/admin)
+#   Prometheus:          http://localhost:9090
+#   ClickHouse HTTP:     http://localhost:8123
+#   OTel Collector health: http://localhost:13133
+#   OTel Collector zpages: http://localhost:55679/debug/tracez
+
+version: '3.8'
+
+services:
+  # ============================================
+  # ClickHouse - колоночное хранилище для метрик
+  # ============================================
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    container_name: clickhouse
+    environment:
+      - CLICKHOUSE_DB=otel
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
+    volumes:
+      - ./clickhouse/config/prometheus.xml:/etc/clickhouse-server/config.d/prometheus.xml:ro
+      - clickhouse-data:/var/lib/clickhouse
+    ports:
+      - "8123:8123"   # HTTP API
+      - "9000:9000"   # Native protocol
+      - "9363:9363"   # Prometheus metrics endpoint
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    restart: unless-stopped
+    networks:
+      - observability
+
+  # ============================================
+  # OTel Collector - принимает метрики, DQ проверки
+  # Fan-out: → Prometheus + → ClickHouse
+  # ============================================
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.96.0
+    container_name: otel-collector
+    command:
+      - --config=/etc/otelcol/config.yaml
+    volumes:
+      - ./collector/otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+      - otel-logs:/var/log/otel
+    ports:
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+      - "13133:13133" # Health check
+      - "55681:55679" # zPages
+      - "8888:8888"   # Prometheus metrics
+    depends_on:
+      - prometheus
+      - clickhouse
+    restart: unless-stopped
+    networks:
+      - observability
+
+  # ============================================
+  # Prometheus - хранение метрик + PromQL
+  # Скрапит: себя, OTel Collector, ClickHouse /metrics
+  # ============================================
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    container_name: prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yaml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+      - --web.enable-remote-write-receiver
+      - --web.console.libraries=/etc/prometheus/console_libraries
+      - --web.console.templates=/etc/prometheus/consoles
+    volumes:
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro
+      - ./prometheus/alerts:/etc/prometheus/alerts:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    networks:
+      - observability
+
+  # ============================================
+  # Grafana - визуализация + дашборды
+  # DS: Prometheus (comparison + workstation)
+  # DS: ClickHouse (clickhouse metrics + stored OTel data)
+  # ============================================
+  grafana:
+    image: grafana/grafana:10.4.1
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-piechart-panel,grafana-clickhouse-datasource
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+      - clickhouse
+    restart: unless-stopped
+    networks:
+      - observability
+
+volumes:
+  prometheus-data:
+  grafana-data:
+  otel-logs:
+  clickhouse-data:
+
+networks:
+  observability:
+    driver: bridge

@@ -1,0 +1,736 @@
+{
+  "id": null,
+  "uid": "prom-vs-ch-nfr",
+  "title": "Prometheus vs ClickHouse — Сравнение NFR",
+  "description": "Сравнение нефункциональных требований: Prometheus (TSDB) vs ClickHouse (MergeTree). Все метрики поступают через Prometheus datasource — Prometheus scrapes себя и ClickHouse /metrics endpoint.",
+  "tags": ["comparison", "prometheus", "clickhouse", "nfr"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "",
+      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "options": {
+        "mode": "markdown",
+        "content": "## Prometheus vs ClickHouse: Нефункциональные требования\n\nОба хранилища получают **одинаковый поток метрик** через OTel Collector. Сравниваем по: потреблению памяти, CPU, скорости записи, объёму хранилища, кардинальности и задержке запросов.\n\n> **Prometheus** — time-series база с PromQL. **ClickHouse** — колоночная база с SQL. Один источник данных, два разных движка."
+      }
+    },
+    {
+      "id": 10,
+      "type": "row",
+      "title": "Потребление памяти (Memory)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 3 },
+      "collapsed": false
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "RAM — Prometheus vs ClickHouse",
+      "description": "RSS память процессов. Prometheus: process_resident_memory_bytes. ClickHouse: ClickHouseAsyncMetrics_MemoryResident (реальная RSS) + ClickHouseMetrics_MemoryTracking (трекинг внутри CH).",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 500000000 },
+              { "color": "red", "value": 1000000000 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Prometheus RSS" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#E05F27", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ClickHouse RSS" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#1F78C1", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ClickHouse Memory Tracking" },
+            "properties": [
+              { "id": "color", "value": { "fixedColor": "#5794F2", "mode": "fixed" } },
+              { "id": "custom.lineStyle", "value": { "fill": "dash", "dash": [4, 4] } }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "process_resident_memory_bytes{job=\"prometheus\"}",
+          "legendFormat": "Prometheus RSS",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseAsyncMetrics_MemoryResident{job=\"clickhouse\"}",
+          "legendFormat": "ClickHouse RSS",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseMetrics_MemoryTracking{job=\"clickhouse\"}",
+          "legendFormat": "ClickHouse Memory Tracking",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "stat",
+      "title": "Текущий RAM — Prometheus",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 300000000 },
+              { "color": "red", "value": 700000000 }
+            ]
+          }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "process_resident_memory_bytes{job=\"prometheus\"}",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "stat",
+      "title": "Текущий RAM — ClickHouse",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 300000000 },
+              { "color": "red", "value": 700000000 }
+            ]
+          }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseAsyncMetrics_MemoryResident{job=\"clickhouse\"}",
+          "legendFormat": "",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "Разница RAM (CH / Prom)",
+      "description": "Коэффициент потребления памяти: ClickHouse / Prometheus. < 1 — ClickHouse экономнее.",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 2 }
+            ]
+          }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseAsyncMetrics_MemoryResident{job=\"clickhouse\"} / process_resident_memory_bytes{job=\"prometheus\"}",
+          "legendFormat": "CH/Prom ratio",
+          "refId": "A",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Пик RAM за 1ч — оба",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 12 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "color": { "mode": "palette-classic" } }
+      },
+      "options": { "reduceOptions": { "calcs": ["max"] }, "orientation": "horizontal", "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "process_resident_memory_bytes{job=\"prometheus\"}",
+          "legendFormat": "Prometheus",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseAsyncMetrics_MemoryResident{job=\"clickhouse\"}",
+          "legendFormat": "ClickHouse",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "row",
+      "title": "Нагрузка CPU",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 },
+      "collapsed": false
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "CPU — Prometheus vs ClickHouse (%)",
+      "description": "Prometheus: rate(process_cpu_seconds_total[5m]) * 100. ClickHouse: суммарное CPU время (user + system), нормализованное в %.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 17 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Prometheus CPU %" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#E05F27", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ClickHouse CPU %" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#1F78C1", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max", "mean"] }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(process_cpu_seconds_total{job=\"prometheus\"}[5m]) * 100",
+          "legendFormat": "Prometheus CPU %",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "(rate(ClickHouseAsyncMetrics_OSUserTimeCPU{job=\"clickhouse\"}[5m]) + rate(ClickHouseAsyncMetrics_OSSystemTimeCPU{job=\"clickhouse\"}[5m])) * 100",
+          "legendFormat": "ClickHouse CPU %",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 40,
+      "type": "row",
+      "title": "Скорость записи (Write Throughput)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 },
+      "collapsed": false
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Write Throughput — сэмплов/строк в секунду",
+      "description": "Оба хранилища получают одинаковый поток от OTel Collector. Prometheus считает сэмплы (samples), ClickHouse — вставленные строки (InsertedRows). Прямое сравнение скорости приёма данных.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 26 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Prometheus samples/s" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#E05F27", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ClickHouse rows/s" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#1F78C1", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max", "mean"] }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(prometheus_tsdb_head_samples_appended_total{job=\"prometheus\"}[5m])",
+          "legendFormat": "Prometheus samples/s",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(ClickHouseProfileEvents_InsertedRows{job=\"clickhouse\"}[5m])",
+          "legendFormat": "ClickHouse rows/s",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 41,
+      "type": "timeseries",
+      "title": "Байт записано в секунду",
+      "description": "Prometheus: байты, записанные в WAL. ClickHouse: байты вставленных данных (до компрессии).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never", "spanNulls": true }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean"] }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(prometheus_tsdb_wal_writes_failed_total[5m])",
+          "legendFormat": "Prometheus WAL write errors/s",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(ClickHouseProfileEvents_InsertedBytes{job=\"clickhouse\"}[5m])",
+          "legendFormat": "ClickHouse inserted bytes/s (raw)",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(ClickHouseProfileEvents_MergedBytes{job=\"clickhouse\"}[5m])",
+          "legendFormat": "ClickHouse merged bytes/s",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 42,
+      "type": "timeseries",
+      "title": "Задержка записи (Write Latency)",
+      "description": "Prometheus: длительность remote write запросов входящих (через remote write receiver). ClickHouse: длительность INSERT запросов из system.query_log, агрегированная через ProfileEvents.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 34 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never", "spanNulls": true }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean"] }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, rate(prometheus_remote_storage_sample_bytes_in_total[5m]))",
+          "legendFormat": "Prometheus remote write P99 (bytes proxy)",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(ClickHouseProfileEvents_InsertQuery{job=\"clickhouse\"}[5m])",
+          "legendFormat": "ClickHouse INSERT queries/s",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 50,
+      "type": "row",
+      "title": "Хранилище и сжатие (Storage & Compression)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 42 },
+      "collapsed": false
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Объём хранилища на диске",
+      "description": "Prometheus: WAL + blocks на диске. ClickHouse: суммарный размер всех MergeTree таблиц (включая otel_metrics_*).",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 43 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": { "lineWidth": 2, "fillOpacity": 8, "showPoints": "never", "spanNulls": true }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Prometheus WAL size" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#E05F27", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Prometheus TSDB blocks" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#FF7383", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "ClickHouse MergeTree total" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "#1F78C1", "mode": "fixed" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "prometheus_tsdb_wal_storage_size_bytes{job=\"prometheus\"}",
+          "legendFormat": "Prometheus WAL size",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "prometheus_tsdb_head_chunks_storage_size_bytes{job=\"prometheus\"}",
+          "legendFormat": "Prometheus TSDB blocks",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseAsyncMetrics_TotalBytesOfMergeTreeTables{job=\"clickhouse\"}",
+          "legendFormat": "ClickHouse MergeTree total",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 51,
+      "type": "stat",
+      "title": "Хранилище сейчас",
+      "gridPos": { "h": 4, "w": 8, "x": 0, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "bytes", "color": { "mode": "palette-classic" } }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "horizontal", "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "prometheus_tsdb_wal_storage_size_bytes{job=\"prometheus\"} + prometheus_tsdb_head_chunks_storage_size_bytes{job=\"prometheus\"}",
+          "legendFormat": "Prometheus total",
+          "refId": "A",
+          "instant": true
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseAsyncMetrics_TotalBytesOfMergeTreeTables{job=\"clickhouse\"}",
+          "legendFormat": "ClickHouse total",
+          "refId": "B",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 52,
+      "type": "timeseries",
+      "title": "Коэффициент сжатия ClickHouse",
+      "description": "ClickHouse сжимает данные колонками. Показывает отношение несжатых байт к сжатым (чем выше — тем лучше сжатие). Prometheus использует Gorilla/Delta-of-Delta кодирование по временным рядам.",
+      "gridPos": { "h": 4, "w": 8, "x": 8, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2,
+          "custom": { "lineWidth": 2, "showPoints": "never", "spanNulls": true }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseAsyncMetrics_TotalUncompressedBytesMergeTreeTables{job=\"clickhouse\"} / ClickHouseAsyncMetrics_TotalBytesOfMergeTreeTables{job=\"clickhouse\"}",
+          "legendFormat": "ClickHouse compression ratio",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 53,
+      "type": "stat",
+      "title": "Строк в MergeTree (ClickHouse)",
+      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 51 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "locale", "color": { "mode": "palette-classic" } }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "colorMode": "value", "graphMode": "area" },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseAsyncMetrics_TotalRowsOfMergeTreeTables{job=\"clickhouse\"}",
+          "legendFormat": "ClickHouse rows",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 60,
+      "type": "row",
+      "title": "Кардинальность и серии (Cardinality)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 55 },
+      "collapsed": false
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Активных временных рядов (Prometheus) vs активных запросов (ClickHouse)",
+      "description": "Prometheus: количество активных time series в head TSDB. ClickHouse: количество одновременных запросов. Разная семантика — показывает разный подход к данным.",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 56 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 6, "showPoints": "never", "spanNulls": true }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "prometheus_tsdb_head_series{job=\"prometheus\"}",
+          "legendFormat": "Prometheus: active series",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "prometheus_tsdb_head_chunks{job=\"prometheus\"}",
+          "legendFormat": "Prometheus: active chunks",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseMetrics_Query{job=\"clickhouse\"}",
+          "legendFormat": "ClickHouse: active queries",
+          "refId": "C"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseMetrics_BackgroundMergesAndMutationsPoolTask{job=\"clickhouse\"}",
+          "legendFormat": "ClickHouse: background merges",
+          "refId": "D"
+        }
+      ]
+    },
+    {
+      "id": 70,
+      "type": "row",
+      "title": "Задержка запросов (Query Latency)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 64 },
+      "collapsed": false
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Query Latency — Prometheus PromQL (P50 / P99)",
+      "description": "Задержка выполнения PromQL запросов в Prometheus. P99 показывает худший случай. Для ClickHouse query latency см. дашборд 'ClickHouse Metrics' (SQL запросы к system.query_log).",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 65 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2, "fillOpacity": 6, "showPoints": "never", "spanNulls": true }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.50, rate(prometheus_engine_query_duration_seconds_bucket{job=\"prometheus\", slice=\"inner_eval\"}[5m]))",
+          "legendFormat": "Prometheus PromQL P50",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.99, rate(prometheus_engine_query_duration_seconds_bucket{job=\"prometheus\", slice=\"inner_eval\"}[5m]))",
+          "legendFormat": "Prometheus PromQL P99",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 71,
+      "type": "timeseries",
+      "title": "ClickHouse — SELECT / INSERT queries per second",
+      "description": "Количество SELECT и INSERT запросов в секунду. Косвенный показатель нагрузки. Точная задержка (P50/P99) доступна в дашборде 'ClickHouse Metrics' через SQL к system.query_log.",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 65 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": { "lineWidth": 2, "fillOpacity": 6, "showPoints": "never", "spanNulls": true }
+        }
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean"] }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(ClickHouseProfileEvents_SelectQuery{job=\"clickhouse\"}[5m])",
+          "legendFormat": "ClickHouse SELECT/s",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(ClickHouseProfileEvents_InsertQuery{job=\"clickhouse\"}[5m])",
+          "legendFormat": "ClickHouse INSERT/s",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(ClickHouseProfileEvents_FailedQuery{job=\"clickhouse\"}[5m])",
+          "legendFormat": "ClickHouse Failed queries/s",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 80,
+      "type": "row",
+      "title": "Здоровье и соединения",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 73 },
+      "collapsed": false
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Соединения и goroutines — Prometheus",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 74 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "showPoints": "never", "spanNulls": true }
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "go_goroutines{job=\"prometheus\"}",
+          "legendFormat": "Goroutines",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "prometheus_http_requests_total{job=\"prometheus\"}",
+          "legendFormat": "HTTP requests total",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Соединения и задачи — ClickHouse",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 74 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "showPoints": "never", "spanNulls": true }
+        }
+      },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseMetrics_TCPConnection{job=\"clickhouse\"}",
+          "legendFormat": "TCP Connections",
+          "refId": "A"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseMetrics_HTTPConnection{job=\"clickhouse\"}",
+          "legendFormat": "HTTP Connections",
+          "refId": "B"
+        },
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "ClickHouseMetrics_OpenFileForRead{job=\"clickhouse\"}",
+          "legendFormat": "Open files (read)",
+          "refId": "C"
+        }
+      ]
+    }
+  ],
+  "annotations": { "list": [] },
+  "templating": { "list": [] },
+  "links": [
+    {
+      "title": "ClickHouse Metrics Dashboard",
+      "url": "/d/clickhouse-metrics",
+      "type": "link",
+      "icon": "external link",
+      "tooltip": "Перейти к дашборду ClickHouse Metrics"
+    },
+    {
+      "title": "Workstation Dashboard",
+      "url": "/d/workstation",
+      "type": "link",
+      "icon": "external link",
+      "tooltip": "Перейти к дашборду Workstation"
+    }
+  ]
+}

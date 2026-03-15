@@ -88,15 +88,6 @@ processors:
           # Флаг: батарея разряжена (< 20%)
           - set(attributes["dq.alert"], "low_battery") where metric.name == "system.battery.charge" and value_double < 0.2
 
-          # Флаг: PostgreSQL медленные запросы
-          - set(attributes["dq.alert"], "slow_queries") where metric.name == "postgres.slow_queries" and value_int > 0
-
-          # Флаг: PostgreSQL deadlocks
-          - set(attributes["dq.alert"], "deadlocks") where metric.name == "postgres.deadlocks" and value_int > 0
-
-          # Флаг: низкий cache hit ratio PostgreSQL (< 90%)
-          - set(attributes["dq.alert"], "low_cache_hit") where metric.name == "postgres.cache.hit_ratio" and value_double < 0.9
-
           # Метка качества для всех записей
           - set(attributes["dq.validated"], "true")
           - set(attributes["dq.timestamp"], Now())
@@ -127,7 +118,6 @@ exporters:
   clickhouse:
     endpoint: tcp://clickhouse:9000
     database: otel
-    create_schema: true
     ttl: 720h  # 30 дней хранения
     timeout: 10s
     retry_on_failure:

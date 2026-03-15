@@ -6,8 +6,5 @@ opentelemetry-exporter-otlp-proto-grpc>=1.20.0
 # System metrics
 psutil>=5.9.0
 
-# PostgreSQL (optional)
-psycopg2-binary>=2.9.0
-
 # Utils
 python-dotenv>=1.0.0

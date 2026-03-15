@@ -18,7 +18,7 @@ import logging
 import platform
 import subprocess
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Iterable, Optional, Dict, Any
 from dataclasses import dataclass
 
@@ -32,13 +32,6 @@ from opentelemetry.sdk.resources import Resource, SERVICE_NAME
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.metrics import Observation, CallbackOptions
 
-# PostgreSQL
-try:
-    import psycopg2
-    HAS_PSYCOPG2 = True
-except ImportError:
-    HAS_PSYCOPG2 = False
-    print("⚠️  psycopg2 not installed. PostgreSQL metrics disabled.")
 
 # ============================================================
 # КОНФИГУРАЦИЯ
@@ -52,23 +45,6 @@ class AgentConfig:
 
     # Интервалы сбора
     collection_interval_sec: int = int(os.getenv("COLLECTION_INTERVAL", "15"))
-
-    # PostgreSQL
-    pg_host: str = os.getenv("POSTGRES_HOST", "localhost")
-    pg_port: int = int(os.getenv("POSTGRES_PORT", "5432"))
-    pg_user: str = os.getenv("POSTGRES_USER", "postgres")
-    pg_password: str = os.getenv("POSTGRES_PASSWORD", "")
-    pg_database: str = os.getenv("POSTGRES_DB", "postgres")
-
-    # Claude Code
-    claude_config_path: str = os.getenv(
-        "CLAUDE_CONFIG_PATH",
-        str(Path.home() / ".claude" / "config.json")
-    )
-    claude_usage_path: str = os.getenv(
-        "CLAUDE_USAGE_PATH",
-        str(Path.home() / ".claude" / "usage.json")
-    )
 
 
 config = AgentConfig()
@@ -232,139 +208,6 @@ class SystemMetricsCollector:
 
 
 # ============================================================
-# POSTGRESQL METRICS COLLECTOR
-# ============================================================
-
-class PostgreSQLMetricsCollector:
-    """Сбор метрик PostgreSQL"""
-
-    def __init__(self):
-        self.conn = None
-        self._connect()
-
-    def _connect(self):
-        """Подключение к PostgreSQL"""
-        if not HAS_PSYCOPG2:
-            return
-
-        try:
-            self.conn = psycopg2.connect(
-                host=config.pg_host,
-                port=config.pg_port,
-                user=config.pg_user,
-                password=config.pg_password,
-                database=config.pg_database,
-                connect_timeout=5
-            )
-            self.conn.autocommit = True
-            logger.info(f"✅ Connected to PostgreSQL: {config.pg_host}:{config.pg_port}")
-        except Exception as e:
-            logger.warning(f"⚠️  PostgreSQL connection failed: {e}")
-            self.conn = None
-
-    def _query(self, sql: str) -> list:
-        """Выполнение запроса"""
-        if not self.conn:
-            self._connect()
-        if not self.conn:
-            return []
-
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(sql)
-                return cur.fetchall()
-        except Exception as e:
-            logger.error(f"PostgreSQL query error: {e}")
-            self.conn = None
-            return []
-
-    def connection_count(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Количество подключений"""
-        rows = self._query("""
-            SELECT state, count(*)
-            FROM pg_stat_activity
-            WHERE state IS NOT NULL
-            GROUP BY state
-        """)
-        for state, count in rows:
-            yield Observation(count, {"state": state})
-
-    def database_size(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Размер баз данных"""
-        rows = self._query("""
-            SELECT datname, pg_database_size(datname) as size
-            FROM pg_database
-            WHERE datistemplate = false
-        """)
-        for dbname, size in rows:
-            yield Observation(size, {"database": dbname})
-
-    def table_count(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Количество таблиц"""
-        rows = self._query("""
-            SELECT count(*) FROM information_schema.tables
-            WHERE table_schema = 'public'
-        """)
-        if rows:
-            yield Observation(rows[0][0], {})
-
-    def transactions(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Транзакции: commits и rollbacks"""
-        rows = self._query("""
-            SELECT datname, xact_commit, xact_rollback
-            FROM pg_stat_database
-            WHERE datname = current_database()
-        """)
-        for dbname, commits, rollbacks in rows:
-            yield Observation(commits, {"database": dbname, "type": "commit"})
-            yield Observation(rollbacks, {"database": dbname, "type": "rollback"})
-
-    def cache_hit_ratio(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Cache hit ratio"""
-        rows = self._query("""
-            SELECT
-                CASE WHEN blks_hit + blks_read = 0 THEN 0
-                     ELSE blks_hit::float / (blks_hit + blks_read)
-                END as ratio
-            FROM pg_stat_database
-            WHERE datname = current_database()
-        """)
-        if rows and rows[0][0] is not None:
-            yield Observation(rows[0][0], {})
-
-    def deadlocks(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Количество deadlocks"""
-        rows = self._query("""
-            SELECT deadlocks FROM pg_stat_database
-            WHERE datname = current_database()
-        """)
-        if rows:
-            yield Observation(rows[0][0], {})
-
-    def slow_queries(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Количество медленных запросов (> 1 сек)"""
-        rows = self._query("""
-            SELECT count(*) FROM pg_stat_activity
-            WHERE state = 'active'
-            AND now() - query_start > interval '1 second'
-        """)
-        if rows:
-            yield Observation(rows[0][0], {})
-
-    def replication_lag(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Лаг репликации (если есть)"""
-        rows = self._query("""
-            SELECT
-                client_addr,
-                EXTRACT(EPOCH FROM (now() - sent_lsn::text::pg_lsn - replay_lsn::text::pg_lsn))
-            FROM pg_stat_replication
-        """)
-        for addr, lag in rows:
-            if lag is not None:
-                yield Observation(lag, {"replica": str(addr)})
-
-
-# ============================================================
 # CLAUDE CODE METRICS COLLECTOR
 # ============================================================
 
@@ -372,26 +215,18 @@ class ClaudeCodeMetricsCollector:
     """
     Сбор метрик использования Claude Code
 
-    Claude Code хранит данные в:
-    - ~/.claude/config.json — конфигурация
-    - ~/.claude/projects/ — проекты и история
-    - ~/.claude.json — глобальные настройки
-
-    Токены можно отслеживать через:
-    1. Логи Claude Code (если включены)
-    2. API usage (если доступен)
-    3. Парсинг истории сессий
+    Claude Code хранит сессии в ~/.claude/projects/<project>/<session>.jsonl
+    Каждая строка — JSON с полем message.usage для assistant-сообщений:
+      {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}
     """
 
     def __init__(self):
-        self.config_path = Path(config.claude_config_path)
-        self.usage_path = Path(config.claude_usage_path)
         self.projects_path = Path.home() / ".claude" / "projects"
-        self.daily_tokens = {}
+        self._cache = {}  # date -> {input, output, cache_create, cache_read, sessions}
         self._last_scan = None
 
     def _scan_usage(self):
-        """Сканирование использования токенов"""
+        """Сканирование JSONL-файлов сессий Claude Code"""
         now = datetime.now()
 
         # Не сканируем чаще раза в минуту
@@ -401,145 +236,94 @@ class ClaudeCodeMetricsCollector:
         self._last_scan = now
         today = now.strftime("%Y-%m-%d")
 
-        # Пробуем разные источники данных
+        if not self.projects_path.exists():
+            return
 
-        # 1. Проверяем usage.json (если Claude Code его создаёт)
-        if self.usage_path.exists():
-            try:
-                with open(self.usage_path, 'r') as f:
-                    usage_data = json.load(f)
-                    if 'daily_tokens' in usage_data:
-                        self.daily_tokens = usage_data['daily_tokens']
-                        return
-            except (json.JSONDecodeError, IOError) as e:
-                logger.debug(f"Could not read usage.json: {e}")
+        totals = {'input': 0, 'output': 0, 'cache_create': 0, 'cache_read': 0}
+        sessions = set()
 
-        # 2. Сканируем проекты Claude Code
-        if self.projects_path.exists():
-            total_tokens = 0
-            sessions_today = 0
-
-            for project_dir in self.projects_path.iterdir():
-                if not project_dir.is_dir():
-                    continue
-
-                # Проверяем файлы сессий
-                for session_file in project_dir.glob("*.json"):
-                    try:
-                        stat = session_file.stat()
-                        file_date = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d")
-
-                        if file_date == today:
-                            sessions_today += 1
-
-                            # Пробуем извлечь информацию о токенах
-                            with open(session_file, 'r') as f:
-                                session_data = json.load(f)
-
-                                # Структура зависит от версии Claude Code
-                                if isinstance(session_data, dict):
-                                    # Пробуем разные поля
-                                    tokens = (
-                                        session_data.get('total_tokens', 0) or
-                                        session_data.get('tokens_used', 0) or
-                                        session_data.get('usage', {}).get('total_tokens', 0)
-                                    )
-                                    total_tokens += tokens
-
-                                elif isinstance(session_data, list):
-                                    # Если это список сообщений
-                                    for msg in session_data:
-                                        if isinstance(msg, dict):
-                                            tokens = msg.get('tokens', 0) or msg.get('usage', {}).get('total_tokens', 0)
-                                            total_tokens += tokens
-
-                    except (json.JSONDecodeError, IOError, KeyError):
-                        continue
-
-            self.daily_tokens[today] = {
-                'tokens': total_tokens,
-                'sessions': sessions_today
-            }
-
-        # 3. Проверяем логи Claude Code (альтернативный путь)
-        log_paths = [
-            Path.home() / ".claude" / "logs",
-            Path.home() / "Library" / "Logs" / "Claude",  # macOS
-            Path.home() / ".local" / "share" / "claude" / "logs",  # Linux
-        ]
-
-        for log_path in log_paths:
-            if log_path.exists():
-                self._parse_logs(log_path, today)
-                break
-
-    def _parse_logs(self, log_path: Path, today: str):
-        """Парсинг логов Claude Code"""
-        total_tokens = 0
-
-        for log_file in log_path.glob("*.log"):
-            try:
-                stat = log_file.stat()
-                file_date = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d")
-
-                if file_date != today:
-                    continue
-
-                with open(log_file, 'r') as f:
-                    for line in f:
-                        # Ищем строки с информацией о токенах
-                        if 'tokens' in line.lower():
-                            # Пробуем извлечь число
-                            import re
-                            matches = re.findall(r'tokens["\s:]+(\d+)', line, re.IGNORECASE)
-                            for match in matches:
-                                total_tokens += int(match)
-
-            except (IOError, ValueError):
+        for project_dir in self.projects_path.iterdir():
+            if not project_dir.is_dir():
                 continue
 
-        if total_tokens > 0:
-            if today not in self.daily_tokens:
-                self.daily_tokens[today] = {'tokens': 0, 'sessions': 0}
-            self.daily_tokens[today]['tokens'] = max(
-                self.daily_tokens[today]['tokens'],
-                total_tokens
-            )
+            for session_file in project_dir.glob("*.jsonl"):
+                try:
+                    stat = session_file.stat()
+                    file_date = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d")
+                    if file_date != today:
+                        continue
+
+                    sessions.add(session_file.stem)
+
+                    with open(session_file, 'r') as f:
+                        for line in f:
+                            try:
+                                d = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+
+                            msg = d.get('message', {})
+                            if not isinstance(msg, dict):
+                                continue
+
+                            usage = msg.get('usage')
+                            if not usage:
+                                continue
+
+                            totals['input'] += usage.get('input_tokens', 0)
+                            totals['output'] += usage.get('output_tokens', 0)
+                            totals['cache_create'] += usage.get('cache_creation_input_tokens', 0)
+                            totals['cache_read'] += usage.get('cache_read_input_tokens', 0)
+
+                except (IOError, OSError):
+                    continue
+
+        self._cache[today] = {**totals, 'sessions': len(sessions)}
 
     def tokens_today(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Токены за сегодня"""
+        """Общее количество токенов за сегодня (input + output + cache)"""
         self._scan_usage()
         today = datetime.now().strftime("%Y-%m-%d")
+        data = self._cache.get(today, {})
 
-        if today in self.daily_tokens:
-            tokens = self.daily_tokens[today].get('tokens', 0)
-            yield Observation(tokens, {"date": today})
-        else:
-            yield Observation(0, {"date": today})
+        total = (data.get('input', 0) + data.get('output', 0)
+                 + data.get('cache_create', 0) + data.get('cache_read', 0))
+        yield Observation(total, {"date": today})
+
+    def input_tokens_today(self, options: CallbackOptions) -> Iterable[Observation]:
+        """Input токены за сегодня"""
+        self._scan_usage()
+        today = datetime.now().strftime("%Y-%m-%d")
+        data = self._cache.get(today, {})
+        yield Observation(data.get('input', 0), {"date": today, "type": "input"})
+
+    def output_tokens_today(self, options: CallbackOptions) -> Iterable[Observation]:
+        """Output токены за сегодня"""
+        self._scan_usage()
+        today = datetime.now().strftime("%Y-%m-%d")
+        data = self._cache.get(today, {})
+        yield Observation(data.get('output', 0), {"date": today, "type": "output"})
+
+    def cache_read_tokens_today(self, options: CallbackOptions) -> Iterable[Observation]:
+        """Cache read токены за сегодня"""
+        self._scan_usage()
+        today = datetime.now().strftime("%Y-%m-%d")
+        data = self._cache.get(today, {})
+        yield Observation(data.get('cache_read', 0), {"date": today, "type": "cache_read"})
+
+    def cache_create_tokens_today(self, options: CallbackOptions) -> Iterable[Observation]:
+        """Cache creation токены за сегодня"""
+        self._scan_usage()
+        today = datetime.now().strftime("%Y-%m-%d")
+        data = self._cache.get(today, {})
+        yield Observation(data.get('cache_create', 0), {"date": today, "type": "cache_create"})
 
     def sessions_today(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Сессии за сегодня"""
+        """Количество сессий за сегодня"""
         self._scan_usage()
         today = datetime.now().strftime("%Y-%m-%d")
-
-        if today in self.daily_tokens:
-            sessions = self.daily_tokens[today].get('sessions', 0)
-            yield Observation(sessions, {"date": today})
-        else:
-            yield Observation(0, {"date": today})
-
-    def tokens_weekly(self, options: CallbackOptions) -> Iterable[Observation]:
-        """Токены за последние 7 дней"""
-        self._scan_usage()
-
-        total = 0
-        now = datetime.now()
-        for i in range(7):
-            date = (now - timedelta(days=i)).strftime("%Y-%m-%d")
-            if date in self.daily_tokens:
-                total += self.daily_tokens[date].get('tokens', 0)
-
-        yield Observation(total, {"period": "7d"})
+        data = self._cache.get(today, {})
+        yield Observation(data.get('sessions', 0), {"date": today})
 
     def is_running(self, options: CallbackOptions) -> Iterable[Observation]:
         """Проверка, запущен ли Claude Code"""
@@ -729,62 +513,37 @@ def register_metrics(meter: metrics.Meter):
 
     logger.info("✅ System metrics registered")
 
-    # PostgreSQL metrics
-    if HAS_PSYCOPG2:
-        pg = PostgreSQLMetricsCollector()
-
-        meter.create_observable_gauge(
-            "postgres.connections",
-            callbacks=[pg.connection_count],
-            description="PostgreSQL connections by state",
-            unit="{connections}"
-        )
-        meter.create_observable_gauge(
-            "postgres.database.size",
-            callbacks=[pg.database_size],
-            description="Database size in bytes",
-            unit="By"
-        )
-        meter.create_observable_gauge(
-            "postgres.tables.count",
-            callbacks=[pg.table_count],
-            description="Number of tables",
-            unit="{tables}"
-        )
-        meter.create_observable_counter(
-            "postgres.transactions",
-            callbacks=[pg.transactions],
-            description="Transaction count",
-            unit="{transactions}"
-        )
-        meter.create_observable_gauge(
-            "postgres.cache.hit_ratio",
-            callbacks=[pg.cache_hit_ratio],
-            description="Cache hit ratio (0-1)",
-            unit="1"
-        )
-        meter.create_observable_counter(
-            "postgres.deadlocks",
-            callbacks=[pg.deadlocks],
-            description="Deadlock count",
-            unit="{deadlocks}"
-        )
-        meter.create_observable_gauge(
-            "postgres.slow_queries",
-            callbacks=[pg.slow_queries],
-            description="Slow queries (>1s)",
-            unit="{queries}"
-        )
-
-        logger.info("✅ PostgreSQL metrics registered")
-
     # Claude Code metrics
     claude = ClaudeCodeMetricsCollector()
 
     meter.create_observable_gauge(
         "claude.tokens.today",
         callbacks=[claude.tokens_today],
-        description="Claude Code tokens used today",
+        description="Claude Code total tokens today (input+output+cache)",
+        unit="{tokens}"
+    )
+    meter.create_observable_gauge(
+        "claude.tokens.input",
+        callbacks=[claude.input_tokens_today],
+        description="Claude Code input tokens today",
+        unit="{tokens}"
+    )
+    meter.create_observable_gauge(
+        "claude.tokens.output",
+        callbacks=[claude.output_tokens_today],
+        description="Claude Code output tokens today",
+        unit="{tokens}"
+    )
+    meter.create_observable_gauge(
+        "claude.tokens.cache_read",
+        callbacks=[claude.cache_read_tokens_today],
+        description="Claude Code cache read tokens today",
+        unit="{tokens}"
+    )
+    meter.create_observable_gauge(
+        "claude.tokens.cache_create",
+        callbacks=[claude.cache_create_tokens_today],
+        description="Claude Code cache creation tokens today",
         unit="{tokens}"
     )
     meter.create_observable_gauge(
@@ -792,12 +551,6 @@ def register_metrics(meter: metrics.Meter):
         callbacks=[claude.sessions_today],
         description="Claude Code sessions today",
         unit="{sessions}"
-    )
-    meter.create_observable_gauge(
-        "claude.tokens.weekly",
-        callbacks=[claude.tokens_weekly],
-        description="Claude Code tokens last 7 days",
-        unit="{tokens}"
     )
     meter.create_observable_gauge(
         "claude.is_running",
